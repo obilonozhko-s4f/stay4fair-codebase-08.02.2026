@@ -171,10 +171,10 @@ h1 {
 <div class="box">
     <div class="label">Provision & Vermittlungsgebühr</div>
     <div class="note">
-        Provision: <?php echo $e($d['pricing']['commission_rate']); ?> %<br>
-        Provision (netto): <?php echo $e($d['pricing']['commission_net']); ?> €<br>
-        MwSt auf Provision: <?php echo $e($d['pricing']['commission_vat']); ?> €<br>
-        <strong>Provision (brutto): <?php echo $e($d['pricing']['commission_gross']); ?> €</strong>
+        Provision: <?php echo $e($d['pricing']['commission_rate'] * 100); ?> %<br>
+        Provision (netto): <?php echo $e(number_format($d['pricing']['commission_net_total'], 2, ',', '.')); ?> €<br>
+        MwSt auf Provision (19%): <?php echo $e(number_format($d['pricing']['commission_vat_total'], 2, ',', '.')); ?> €<br>
+        <strong>Provision (brutto): <?php echo $e(number_format($d['pricing']['commission_gross_total'], 2, ',', '.')); ?> €</strong>
     </div>
 </div>
 <?php elseif (strpos($d['business_model'], 'Modell B') !== false) : ?>
