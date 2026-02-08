@@ -1,8 +1,8 @@
 <?php
 /**
- * Plugin Name: BSBT – Business Model Provider (V5.4 - Nuclear Tax Fix)
- * Description: Полностью отключает налоговый статус для Model B.
- * Version: 5.4.0
+ * Plugin Name: BSBT – Business Model Provider (V5.4.1 - Nuclear Tax Fix + UI Restore)
+ * Description: Полностью отключает налоговый статус для Model B и восстанавливает описание моделей в админке.
+ * Version: 5.4.1
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -46,24 +46,20 @@ function bsbt_sync_to_mphb_database( $room_type_id, $price ) {
 /**
  * 2. ЯДЕРНЫЙ ФИКС НАЛОГОВ (Nuclear Tax Fix)
  */
-
-// Фильтр: является ли товар налогооблагаемым?
 add_filter( 'woocommerce_product_is_taxable', 'bsbt_make_model_b_non_taxable', 10, 2 );
 function bsbt_make_model_b_non_taxable( $is_taxable, $product ) {
     $room_type_id = get_post_meta( $product->get_id(), '_mphb_room_type_id', true );
     if ( $room_type_id ) {
         $model = get_post_meta( $room_type_id, BSBT_META_MODEL, true ) ?: 'model_a';
         if ( $model === 'model_b' ) {
-            return false; // Налог? Нет, не слышали.
+            return false; 
         }
     }
     return $is_taxable;
 }
 
-// Принудительно ставим "No Tax" для айтемов в корзине
 add_action( 'woocommerce_before_calculate_totals', function( $cart ) {
     if ( is_admin() && ! defined( 'DOING_AJAX' ) ) return;
-
     foreach ( $cart->get_cart() as $item ) {
         $product = $item['data'];
         $room_type_id = get_post_meta( $product->get_id(), '_mphb_room_type_id', true );
@@ -78,17 +74,38 @@ add_action( 'woocommerce_before_calculate_totals', function( $cart ) {
 }, 99 );
 
 /**
- * 3. АДМИНКА
+ * 3. АДМИНКА (Метабокс с описанием)
  */
 add_action( 'add_meta_boxes', function () {
-    add_meta_box('bsbt_m', 'BSBT Model', function($post){
+    add_meta_box('bsbt_m', 'BSBT Business Model', function($post){
         $m = get_post_meta($post->ID, BSBT_META_MODEL, true) ?: 'model_a';
         ?>
-        <label><input type="radio" name="bsbt_model" value="model_a" <?php checked($m,'model_a')?>> Model A</label><br>
-        <label><input type="radio" name="bsbt_model" value="model_b" <?php checked($m,'model_b')?>> Model B (Tax Off)</label>
+        <div style="margin-bottom: 15px;">
+            <label style="font-weight: bold; display: block; margin-bottom: 5px;">
+                <input type="radio" name="bsbt_model" value="model_a" <?php checked($m,'model_a')?>> Model A (Standard)
+            </label>
+            <p class="description" style="margin-left: 20px;">
+                VAT (7%) is calculated from the <strong>total price</strong>. Normal MPHB behavior.
+            </p>
+        </div>
+
+        <div style="margin-bottom: 10px;">
+            <label style="font-weight: bold; display: block; margin-bottom: 5px;">
+                <input type="radio" name="bsbt_model" value="model_b" <?php checked($m,'model_b')?>> Model B (Tax on Fee)
+            </label>
+            <p class="description" style="margin-left: 20px;">
+                VAT is calculated <strong>only from the Service Fee (19%)</strong>. WooCommerce taxes are forced OFF.
+            </p>
+        </div>
+
+        <hr>
+        <p style="font-size: 11px; color: #666;">
+            <em>Note: For Model B, make sure "Owner Price" field is filled. Prices will sync to Rates automatically on update.</em>
+        </p>
+
         <input type="hidden" name="bsbt_nonce" value="<?php echo wp_create_nonce('bsbt_s')?>">
         <?php
-    }, 'mphb_room_type', 'side');
+    }, 'mphb_room_type', 'side', 'high');
 });
 
 add_action('save_post_mphb_room_type', function($post_id){
