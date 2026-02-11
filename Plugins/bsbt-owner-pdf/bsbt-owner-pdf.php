@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: BSBT – Owner PDF
- * Description: Owner booking confirmation + payout summary PDF. (V1.8.9 - Full Bridge + Data Restored)
- * Version: 1.8.9
+ * Description: Owner booking confirmation + payout summary PDF. (V1.9.1 - Variable Alignment)
+ * Version: 1.9.1
  * Author: BS Business Travelling / Stay4Fair.com
  */
 
@@ -17,30 +17,18 @@ final class BSBT_Owner_PDF {
     const ACF_OWNER_EMAIL_KEY = 'field_68fccdd0cdffc';
 
     public static function init() {
-        // Регистрация метабоксов
         add_action('add_meta_boxes', [__CLASS__, 'register_metabox'], 10, 2);
         add_action('add_meta_boxes_mphb_booking', [__CLASS__, 'register_metabox_direct'], 10, 1);
-
-        // Обработка действий из админки
         add_action('admin_post_bsbt_owner_pdf_generate', [__CLASS__, 'admin_generate']);
         add_action('admin_post_bsbt_owner_pdf_open',     [__CLASS__, 'admin_open']);
         add_action('admin_post_bsbt_owner_pdf_resend',   [__CLASS__, 'admin_resend']);
-
-        // Хуки автоматизации
         add_action('mphb_booking_status_changed', [__CLASS__, 'maybe_auto_send'], 20, 99);
         add_action('woocommerce_order_status_processing', [__CLASS__, 'woo_processing_fallback'], 20, 1);
         add_action('woocommerce_payment_complete',        [__CLASS__, 'woo_payment_complete_fallback'], 20, 1);
     }
 
-    /* =========================================================
-     * 1) АВТОМАТИЧЕСКАЯ ОТПРАВКА
-     * ========================================================= */
     public static function maybe_auto_send(...$args) {
-        $booking = null;
-        $bid = 0;
-        $new_status = '';
-        $is_force = false;
-
+        $booking = null; $bid = 0; $new_status = ''; $is_force = false;
         foreach ($args as $arg) {
             if (is_object($arg) && method_exists($arg, 'getId')) {
                 $booking = $arg; $bid = (int)$arg->getId(); continue;
@@ -55,22 +43,16 @@ final class BSBT_Owner_PDF {
                 if ($s === 'force_trigger') $is_force = true;
             }
         }
-
         if ($bid <= 0) return;
-
-        // Защита от дублей: если не "принудительно", то только для подтвержденных и не отправленных
         if (!$is_force) {
             if ($new_status !== 'confirmed') return;
             if (get_post_meta($bid, self::META_MAIL_SENT, true) === '1') return;
         }
-
         if (!$booking && function_exists('MPHB')) {
             $booking = MPHB()->getBookingRepository()->findById($bid);
         }
         if (!$booking) return;
-
         $res = self::generate_pdf($bid, ['trigger' => $is_force ? 'force_trigger' : 'auto_status_confirmed']);
-
         if (!empty($res['ok']) && !empty($res['path']) && file_exists($res['path'])) {
             $mail_ok = self::email_owner($bid, $res['path']);
             if ($mail_ok) {
@@ -81,22 +63,13 @@ final class BSBT_Owner_PDF {
         }
     }
 
-    /* =========================================================
-     * 2) МОСТ WOOCOMMERCE -> MPHB (Official Bridge Meta)
-     * ========================================================= */
-    public static function woo_processing_fallback($order_id) {
-        self::bridge_from_order((int)$order_id, 'woo_processing');
-    }
-
-    public static function woo_payment_complete_fallback($order_id) {
-        self::bridge_from_order((int)$order_id, 'woo_payment_complete');
-    }
+    public static function woo_processing_fallback($order_id) { self::bridge_from_order((int)$order_id, 'woo_processing'); }
+    public static function woo_payment_complete_fallback($order_id) { self::bridge_from_order((int)$order_id, 'woo_payment_complete'); }
 
     private static function bridge_from_order(int $order_id, string $trigger): void {
         if ($order_id <= 0 || !function_exists('wc_get_order')) return;
         $order = wc_get_order($order_id);
         if (!$order || !($order->is_paid() || in_array($order->get_status(), ['processing','completed']))) return;
-
         foreach ($order->get_items() as $item) {
             $payment_id = 0;
             $meta_data = $item->get_meta_data();
@@ -108,7 +81,6 @@ final class BSBT_Owner_PDF {
                     }
                 }
             }
-
             if ($payment_id > 0) {
                 $booking_id = (int)get_post_meta($payment_id, '_mphb_booking_id', true);
                 if ($booking_id > 0) {
@@ -121,24 +93,17 @@ final class BSBT_Owner_PDF {
         }
     }
 
-    /* =========================================================
-     * 3) ГЕНЕРАЦИЯ PDF И СБОР ДАННЫХ
-     * ========================================================= */
     private static function generate_pdf(int $bid, array $ctx): array {
         if (!function_exists('bs_bt_try_load_pdf_engine')) return ['ok'=>false];
-        
         $data = self::collect_data($bid);
         if (!$data['ok']) return ['ok'=>false];
-
         $upload = wp_upload_dir();
         $dir = trailingslashit($upload['basedir']).'bsbt-owner-pdf/';
         wp_mkdir_p($dir);
         $path = $dir.'Owner_PDF_'.$bid.'.pdf';
-
         try {
             $engine = bs_bt_try_load_pdf_engine();
             $html = self::render_pdf_html($data['data']);
-            
             if ($engine === 'mpdf') {
                 $mpdf = new \Mpdf\Mpdf(['format'=>'A4']);
                 $mpdf->WriteHTML($html);
@@ -149,7 +114,6 @@ final class BSBT_Owner_PDF {
                 $dom->render();
                 file_put_contents($path, $dom->output());
             }
-            
             self::log($bid, ['path' => $path, 'generated_at' => current_time('mysql'), 'trigger' => $ctx['trigger'] ?? 'ui']);
             return ['ok'=>true, 'path'=>$path];
         } catch (\Throwable $e) {
@@ -167,28 +131,47 @@ final class BSBT_Owner_PDF {
         if (empty($rooms)) return ['ok'=>false];
         $rt = $rooms[0]->getRoomTypeId();
 
-        // Данные гостя
+        // Перенос дат в начало для симметрии
+        $in  = get_post_meta($bid, 'mphb_check_in_date', true);
+        $out = get_post_meta($bid, 'mphb_check_out_date', true);
+
+        // SNAPSHOT INTEGRATION
+        $snap_payout = get_post_meta($bid, '_bsbt_snapshot_owner_payout', true);
+        $snap_model  = get_post_meta($bid, '_bsbt_snapshot_model', true);
+        
+        if ( $snap_payout !== '' ) {
+            $n         = (int)get_post_meta($bid, '_bsbt_snapshot_nights', true);
+            $total     = (float)$snap_payout;
+            $model_key = $snap_model;
+            
+            $pricing = null;
+            if ($model_key === 'model_b') {
+                $pricing = [
+                    'commission_rate'        => (float)get_post_meta($bid, '_bsbt_snapshot_fee_rate', true),
+                    'commission_net_total'   => (float)get_post_meta($bid, '_bsbt_snapshot_fee_net_total', true),
+                    'commission_vat_total'   => (float)get_post_meta($bid, '_bsbt_snapshot_fee_vat_total', true),
+                    'commission_gross_total' => (float)get_post_meta($bid, '_bsbt_snapshot_fee_gross_total', true)
+                ];
+            }
+        } else {
+            $n         = max(1, (strtotime($out) - strtotime($in)) / 86400);
+            $model_key = get_post_meta($rt, '_bsbt_business_model', true) ?: 'model_a';
+            $ppn       = (float)get_post_meta($rt, 'owner_price_per_night', true);
+            if (!$ppn && function_exists('get_field')) $ppn = (float)get_field('owner_price_per_night', $rt);
+            $total     = $ppn * $n;
+
+            $pricing = null;
+            if ($model_key === 'model_b') {
+                $f = defined('BSBT_FEE') ? BSBT_FEE : 0.15;
+                $v = defined('BSBT_VAT_ON_FEE') ? BSBT_VAT_ON_FEE : 0.19;
+                $net = $total * $f; $vat = $net * $v;
+                $pricing = ['commission_rate'=>$f, 'commission_net_total'=>$net, 'commission_vat_total'=>$vat, 'commission_gross_total'=>$net+$vat];
+            }
+        }
+
         $cc = get_post_meta($bid, 'mphb_country', true);
         $countries = ['DE'=>'Deutschland','AT'=>'Österreich','CH'=>'Schweiz','FR'=>'Frankreich','IT'=>'Italien','ES'=>'Spanien'];
         $full_country = $countries[$cc] ?? $cc;
-
-        $in  = get_post_meta($bid, 'mphb_check_in_date', true);
-        $out = get_post_meta($bid, 'mphb_check_out_date', true);
-        $n   = max(1, (strtotime($out) - strtotime($in)) / 86400);
-
-        // Расчет выплаты
-        $model_key = get_post_meta($rt, '_bsbt_business_model', true) ?: 'model_a';
-        $ppn = (float)get_post_meta($rt, 'owner_price_per_night', true);
-        if (!$ppn && function_exists('get_field')) $ppn = (float)get_field('owner_price_per_night', $rt);
-        $total = $ppn * $n;
-
-        $pricing = null;
-        if ($model_key === 'model_b') {
-            $f = defined('BSBT_FEE') ? BSBT_FEE : 0.15;
-            $v = defined('BSBT_VAT_ON_FEE') ? BSBT_VAT_ON_FEE : 0.19;
-            $net = $total * $f; $vat = $net * $v;
-            $pricing = ['commission_rate'=>$f, 'commission_net_total'=>$net, 'commission_vat_total'=>$vat, 'commission_gross_total'=>$net+$vat];
-        }
 
         return ['ok'=>true, 'data'=>[
             'booking_id'     => $bid,
@@ -220,9 +203,6 @@ final class BSBT_Owner_PDF {
         return ob_get_clean();
     }
 
-    /* =========================================================
-     * 4) ИНТЕРФЕЙС И ПОЧТА
-     * ========================================================= */
     public static function register_metabox($post_type) { if ($post_type === 'mphb_booking') self::add_metabox(); }
     public static function register_metabox_direct() { self::add_metabox(); }
     private static function add_metabox() {
@@ -236,7 +216,6 @@ final class BSBT_Owner_PDF {
         $color  = ($decision === 'approved') ? '#2e7d32' : (($decision === 'declined') ? '#c62828' : '#f9a825');
         $sent = (get_post_meta($bid, self::META_MAIL_SENT, true) === '1');
         $nonce = wp_create_nonce('bsbt_owner_pdf_'.$bid);
-
         echo "<div style='font-size:12px;line-height:1.4'>";
         echo "<p><strong>Entscheidung:</strong> <span style='color:$color'>$status</span></p>";
         echo "<p><strong>E-Mail Status:</strong> " . ($sent ? "<span style='color:#2e7d32'>Versendet</span>" : "<span style='color:#f9a825'>Nicht versendet</span>") . "</p>";
@@ -251,12 +230,12 @@ final class BSBT_Owner_PDF {
     public static function admin_open() {
         self::guard(); $bid = (int)$_GET['booking_id']; 
         $log = get_post_meta($bid, self::META_LOG, true); $last = is_array($log) ? end($log) : null;
-        if (!$last || !file_exists($last['path'])) wp_die('PDF Datei nicht gefunden. Bitte zuerst Erzeugen.');
+        if (!$last || !file_exists($last['path'])) wp_die('PDF Datei nicht gefunden.');
         header('Content-Type: application/pdf'); readfile($last['path']); exit;
     }
     public static function admin_resend() {
         self::guard(); $bid = (int)$_GET['booking_id']; 
-        delete_post_meta($bid, self::META_MAIL_SENT); // Сброс флага для принудительной переотправки
+        delete_post_meta($bid, self::META_MAIL_SENT); 
         self::maybe_auto_send($bid, 'confirmed', 'force_trigger');
         wp_redirect(wp_get_referer()); exit;
     }
