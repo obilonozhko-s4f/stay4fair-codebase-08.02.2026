@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name: BSBT – Owner Bookings (V7.8 – CORE FLOW, AUTHORIZE SAFE)
+ * Plugin Name: BSBT – Owner Bookings (V7.8.1 – SNAPSHOT READY)
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -31,7 +31,7 @@ final class BSBT_Owner_Bookings {
             'bsbt-owner-bookings',
             plugin_dir_url(__FILE__) . 'assets/css/owner-bookings.css',
             [],
-            '7.8'
+            '7.8.1'
         );
     }
 
@@ -89,7 +89,19 @@ final class BSBT_Owner_Bookings {
         return max(0,(strtotime($out)-strtotime($in))/86400);
     }
 
+    /**
+     * Вычисляет сумму выплаты владельцу.
+     * Snapshot-Ready: Приоритет данным из мета-полей брони.
+     */
     private function payout(int $booking_id, int $nights): ?float {
+        // 1️⃣ Сначала проверяем Snapshot (замороженную выплату)
+        $snapshot_payout = get_post_meta($booking_id, '_bsbt_snapshot_owner_payout', true);
+        
+        if ( $snapshot_payout !== '' ) {
+            return (float) $snapshot_payout;
+        }
+
+        // 2️⃣ Fallback: старая логика, если снапшота еще нет (старые брони)
         if ($nights <= 0 || !function_exists('MPHB')) return null;
 
         $b = MPHB()->getBookingRepository()->findById($booking_id);
@@ -102,13 +114,13 @@ final class BSBT_Owner_Bookings {
 
         $ppn = function_exists('get_field')
             ? (float) get_field('owner_price_per_night', $room_type_id)
-            : 0.0;
+            : (float) get_post_meta($room_type_id, 'owner_price_per_night', true);
 
         return $ppn > 0 ? $ppn * $nights : null;
     }
 
     /* =========================
-     * RENDER (оставляем твою UI)
+     * RENDER
      * ========================= */
     public function render() {
         if ( ! is_user_logged_in() || ! $this->is_owner_or_admin() ) return 'Zugriff verweigert.';
@@ -152,6 +164,7 @@ final class BSBT_Owner_Bookings {
 
                         $owner_decision = get_post_meta($bid,'_bsbt_owner_decision',true);
                         $confirmed = ($owner_decision === 'approved');
+                        $declined = ($owner_decision === 'declined');
 
                         [$apt_id,$apt_title,$guests_count] = $this->get_booking_data($bid);
                         [$in,$out] = $this->get_dates($bid);
@@ -177,8 +190,8 @@ final class BSBT_Owner_Bookings {
                         $zip     = get_post_meta($bid,'mphb_zip',true);
                         $city    = get_post_meta($bid,'mphb_city',true);
 
-                        $email = get_post_meta($bid,'mphb_email',true);
-                        $phone = get_post_meta($bid,'mphb_phone',true);
+                        $email = (string)get_post_meta($bid,'mphb_email',true);
+                        $phone = (string)get_post_meta($bid,'mphb_phone',true);
                     ?>
 
                         <tr>
@@ -189,7 +202,7 @@ final class BSBT_Owner_Bookings {
                             </td>
 
                             <td>
-                                <?php if(!$confirmed): ?><span class="badge-new">NEUE ANFRAGE</span><?php endif; ?>
+                                <?php if(!$confirmed && !$declined): ?><span class="badge-new">NEUE ANFRAGE</span><?php endif; ?>
                                 <span class="t-bold"><?= esc_html($guest) ?></span>
                                 <span class="t-gray"><?= esc_html($country) ?> · <?= (int)$guests_count ?> Gäste</span>
 
@@ -202,13 +215,21 @@ final class BSBT_Owner_Bookings {
                                 <?php endif; ?>
 
                                 <?php if($confirmed): ?>
-                                    <div class="contact-box">
-                                        <a href="https://wa.me/<?= esc_attr(preg_replace('/\D+/','',(string)$phone)) ?>">WhatsApp</a>
-                                        <a href="tel:<?= esc_attr((string)$phone) ?>">Call</a>
-                                        <a href="mailto:<?= esc_attr((string)$email) ?>">Email</a>
+                                    <div class="contact-box" style="margin-top:10px; border-top:1px solid #eee; padding-top:8px;">
+                                        <div style="margin-bottom:8px;">
+                                            <span style="display:block; font-size:11px; color:#999; text-transform:uppercase;">E-Mail & Telefon:</span>
+                                            <strong style="font-size:13px; color:#333; display:block;"><?= esc_html($email) ?></strong>
+                                            <strong style="font-size:13px; color:#333; display:block;"><?= esc_html($phone) ?></strong>
+                                        </div>
+                                        <div style="display:flex; gap:8px;">
+                                            <a href="https://wa.me/<?= esc_attr(preg_replace('/\D+/','',$phone)) ?>" target="_blank" class="button" style="background:#25D366; color:#fff; border:none; padding:4px 10px; font-size:12px; border-radius:4px; text-decoration:none;">WhatsApp</a>
+                                            <a href="tel:<?= esc_attr($phone) ?>" class="button" style="background:#007bff; color:#fff; border:none; padding:4px 10px; font-size:12px; border-radius:4px; text-decoration:none;">Call</a>
+                                        </div>
                                     </div>
+                                <?php elseif($declined): ?>
+                                    <div class="locked-info" style="color:#d32f2f; margin-top:10px;">Anfrage abgelehnt</div>
                                 <?php else: ?>
-                                    <div class="locked-info">Kontaktdaten werden nach Bestätigung freigeschaltet</div>
+                                    <div class="locked-info" style="margin-top:10px;">Kontaktdaten werden nach Bestätigung freigeschaltet</div>
                                 <?php endif; ?>
                             </td>
 
@@ -218,8 +239,12 @@ final class BSBT_Owner_Bookings {
                             </td>
 
                             <td>
-                                <span style="color:<?= $confirmed?'#25D366':'#d32f2f' ?>;font-weight:900;">
-                                    <?= $confirmed?'BESTÄTIGT':'OFFEN' ?>
+                                <span style="color:<?= $confirmed?'#25D366':($declined?'#d32f2f':'#d32f2f') ?>;font-weight:900;">
+                                    <?php 
+                                        if($confirmed) echo 'BESTÄTIGT';
+                                        elseif($declined) echo 'ABGELEHNT';
+                                        else echo 'OFFEN';
+                                    ?>
                                 </span>
                             </td>
 
@@ -228,20 +253,28 @@ final class BSBT_Owner_Bookings {
                             </td>
 
                             <td style="text-align:center;">
-                                <?php if(!$confirmed): ?>
+                                <?php if ($owner_decision === 'approved'): ?>
+                                    <div style="color:#25D366;font-weight:600;line-height:1.4; text-align: left; padding: 5px;">
+                                        ✔ Bestätigung erhalten.<br>
+                                        <span style="font-weight:normal;">Wir übernehmen nun die weitere Organisation.<br>
+                                        Bitte bereiten Sie die Wohnung vor und organisieren Sie die Schlüsselübergabe.</span>
+                                        <?php if($checkin_time): ?><br><strong>Ankunftszeit: <?= esc_html((string)$checkin_time) ?></strong><?php endif; ?>
+                                    </div>
+
+                                <?php elseif ($owner_decision === 'declined'): ?>
+                                    <div style="color:#d32f2f;font-weight:600;line-height:1.4; text-align: left; padding: 5px;">
+                                        🚫 Abgelehnt.<br>
+                                        <span style="font-weight:normal;">Diese Buchung wird innerhalb von 7 Tagen aus Ihrer Liste gelöscht.</span>
+                                    </div>
+
+                                <?php else: ?>
                                     <button class="button btn-action-confirm bsbt-btn-base"
                                             data-id="<?= (int)$bid ?>"
                                             data-nonce="<?= esc_attr($nonce) ?>">Bestätigen</button>
                                     <button class="button btn-action-reject bsbt-btn-base"
                                             data-id="<?= (int)$bid ?>"
-                                            data-nonce="<?= esc_attr($nonce) ?>">Ablehnen</button>
-                                <?php else: ?>
-                                    <div style="color:#25D366;font-weight:600;line-height:1.4;">
-                                        ✔ Bestätigung erhalten.<br>
-                                        Wir übernehmen nun die weitere Organisation.<br>
-                                        Bitte bereiten Sie die Wohnung vor und organisieren Sie die Schlüsselübergabe.
-                                        <?php if($checkin_time): ?><br><strong>Ankunftszeit: <?= esc_html((string)$checkin_time) ?></strong><?php endif; ?>
-                                    </div>
+                                            data-nonce="<?= esc_attr($nonce) ?>"
+                                            style="margin-top:5px;">Ablehnen</button>
                                 <?php endif; ?>
                             </td>
                         </tr>
@@ -277,56 +310,33 @@ final class BSBT_Owner_Bookings {
         <?php return ob_get_clean();
     }
 
-    /* =========================
-     * AJAX CONFIRM/REJECT via CORE
-     * ========================= */
     public function ajax_confirm() {
         check_ajax_referer('bsbt_owner_action');
-
-        if ( ! $this->is_owner_or_admin() ) {
-            wp_send_json_error(['message'=>'No permission']);
-        }
-
+        if ( ! $this->is_owner_or_admin() ) wp_send_json_error(['message'=>'No permission']);
         $id = (int)($_POST['booking_id'] ?? 0);
         if ($id<=0) wp_send_json_error(['message'=>'Invalid booking id']);
-
-        // owner check (UI-level)
         if ( ! current_user_can('manage_options') ) {
             if ( $this->get_booking_owner_id($id) !== get_current_user_id() ) {
                 wp_send_json_error(['message'=>'Not your booking']);
             }
         }
-
         $result = BSBT_Owner_Decision_Core::approve_and_send_payment($id);
-
-        if ( ! empty($result['ok']) ) {
-            wp_send_json_success(['message' => $result['message'] ?? 'OK']);
-        }
+        if ( ! empty($result['ok']) ) wp_send_json_success(['message' => $result['message'] ?? 'OK']);
         wp_send_json_error(['message' => $result['message'] ?? 'Error']);
     }
 
     public function ajax_reject() {
         check_ajax_referer('bsbt_owner_action');
-
-        if ( ! $this->is_owner_or_admin() ) {
-            wp_send_json_error(['message'=>'No permission']);
-        }
-
+        if ( ! $this->is_owner_or_admin() ) wp_send_json_error(['message'=>'No permission']);
         $id = (int)($_POST['booking_id'] ?? 0);
         if ($id<=0) wp_send_json_error(['message'=>'Invalid booking id']);
-
-        // owner check (UI-level)
         if ( ! current_user_can('manage_options') ) {
             if ( $this->get_booking_owner_id($id) !== get_current_user_id() ) {
                 wp_send_json_error(['message'=>'Not your booking']);
             }
         }
-
         $result = BSBT_Owner_Decision_Core::decline_booking($id);
-
-        if ( ! empty($result['ok']) ) {
-            wp_send_json_success(['message' => $result['message'] ?? 'OK']);
-        }
+        if ( ! empty($result['ok']) ) wp_send_json_success(['message' => $result['message'] ?? 'OK']);
         wp_send_json_error(['message' => $result['message'] ?? 'Error']);
     }
 }
