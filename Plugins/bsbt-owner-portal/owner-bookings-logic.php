@@ -1,9 +1,12 @@
 <?php
 /**
- * Plugin Name: BSBT – Owner Bookings (V7.6 – DIRECT CAPTURE, UI SAFE)
+ * Plugin Name: BSBT – Owner Bookings (V7.8 – CORE FLOW, AUTHORIZE SAFE)
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
+
+// ✅ Core is required (otherwise "Core not loaded")
+require_once plugin_dir_path(__FILE__) . 'includes/owner-decision-core.php';
 
 final class BSBT_Owner_Bookings {
 
@@ -18,7 +21,7 @@ final class BSBT_Owner_Bookings {
     }
 
     /* =========================
-     * ASSETS (FIXED)
+     * ASSETS
      * ========================= */
     public function enqueue_assets() {
         if ( ! is_user_logged_in() ) return;
@@ -28,7 +31,7 @@ final class BSBT_Owner_Bookings {
             'bsbt-owner-bookings',
             plugin_dir_url(__FILE__) . 'assets/css/owner-bookings.css',
             [],
-            '7.6'
+            '7.8'
         );
     }
 
@@ -104,68 +107,8 @@ final class BSBT_Owner_Bookings {
         return $ppn > 0 ? $ppn * $nights : null;
     }
 
-    /* === FIND WC ORDER BY BOOKING ID === */
-    private function find_wc_order_for_booking(int $booking_id): int {
-        if ( ! function_exists('wc_get_orders') ) return 0;
-
-        $needle = 'Reservation #' . $booking_id;
-
-        $orders = wc_get_orders([
-            'limit'   => 50,
-            'orderby' => 'date',
-            'order'   => 'DESC',
-            'status'  => array_keys(wc_get_order_statuses()),
-        ]);
-
-        foreach ($orders as $order) {
-            foreach ($order->get_items() as $item) {
-                if (strpos($item->get_name(), $needle) !== false) {
-                    return (int)$order->get_id();
-                }
-            }
-        }
-        return 0;
-    }
-
     /* =========================
-     * ADMIN NOTIFY (NEW, minimal)
-     * ========================= */
-    private function notify_admin_reject(int $booking_id): void {
-        $to = 'business@stay4fair.com';
-        $subject = 'BSBT: Booking abgelehnt – Alternative benötigt';
-
-        $guest = trim(
-            (string) get_post_meta($booking_id,'mphb_first_name',true) . ' ' .
-            (string) get_post_meta($booking_id,'mphb_last_name',true)
-        );
-
-        $check_in  = (string) get_post_meta($booking_id,'mphb_check_in_date',true);
-        $check_out = (string) get_post_meta($booking_id,'mphb_check_out_date',true);
-
-        $apt_id = 0;
-        if (function_exists('MPHB')) {
-            $b = MPHB()->getBookingRepository()->findById($booking_id);
-            if ($b) {
-                $room = $b->getReservedRooms()[0] ?? null;
-                if ($room && method_exists($room,'getRoomTypeId')) {
-                    $apt_id = (int) $room->getRoomTypeId();
-                }
-            }
-        }
-
-        $message =
-            "Owner hat eine Buchung abgelehnt.\n\n" .
-            "Booking ID: #{$booking_id}\n" .
-            ($apt_id ? "Wohnungs ID: {$apt_id}\n" : "") .
-            ($guest ? "Gast: {$guest}\n" : "") .
-            (($check_in || $check_out) ? "Zeitraum: {$check_in} – {$check_out}\n" : "") .
-            "\nBitte Alternative prüfen und dem Gast anbieten.\n";
-
-        wp_mail($to, $subject, $message);
-    }
-
-    /* =========================
-     * RENDER (RESTORED HTML + JS)
+     * RENDER (оставляем твою UI)
      * ========================= */
     public function render() {
         if ( ! is_user_logged_in() || ! $this->is_owner_or_admin() ) return 'Zugriff verweigert.';
@@ -189,13 +132,6 @@ final class BSBT_Owner_Bookings {
         ob_start(); ?>
 
         <div class="bsbt-container">
-            
-            <?php /* <div class="bsbt-header">
-                <h1>Meine Buchungen</h1>
-                <a href="/owner-dashboard/" class="button btn-gold-stable bsbt-btn-base">← Dashboard</a>
-            </div>
-            */ ?>
-
             <div class="bsbt-card">
                 <table class="bsbt-table">
                     <thead>
@@ -247,8 +183,8 @@ final class BSBT_Owner_Bookings {
 
                         <tr>
                             <td>
-                                <span class="t-bold">Booking ID: #<?= $bid ?></span>
-                                <span class="t-gray">Wohnungs ID: <?= $apt_id ?></span>
+                                <span class="t-bold">Booking ID: #<?= (int)$bid ?></span>
+                                <span class="t-gray">Wohnungs ID: <?= (int)$apt_id ?></span>
                                 <span class="apt-name-static"><?= esc_html($apt_title) ?></span>
                             </td>
 
@@ -267,7 +203,7 @@ final class BSBT_Owner_Bookings {
 
                                 <?php if($confirmed): ?>
                                     <div class="contact-box">
-                                        <a href="https://wa.me/<?= preg_replace('/\D+/','',(string)$phone) ?>">WhatsApp</a>
+                                        <a href="https://wa.me/<?= esc_attr(preg_replace('/\D+/','',(string)$phone)) ?>">WhatsApp</a>
                                         <a href="tel:<?= esc_attr((string)$phone) ?>">Call</a>
                                         <a href="mailto:<?= esc_attr((string)$email) ?>">Email</a>
                                     </div>
@@ -294,11 +230,11 @@ final class BSBT_Owner_Bookings {
                             <td style="text-align:center;">
                                 <?php if(!$confirmed): ?>
                                     <button class="button btn-action-confirm bsbt-btn-base"
-                                            data-id="<?= $bid ?>"
-                                            data-nonce="<?= $nonce ?>">Bestätigen</button>
+                                            data-id="<?= (int)$bid ?>"
+                                            data-nonce="<?= esc_attr($nonce) ?>">Bestätigen</button>
                                     <button class="button btn-action-reject bsbt-btn-base"
-                                            data-id="<?= $bid ?>"
-                                            data-nonce="<?= $nonce ?>">Ablehnen</button>
+                                            data-id="<?= (int)$bid ?>"
+                                            data-nonce="<?= esc_attr($nonce) ?>">Ablehnen</button>
                                 <?php else: ?>
                                     <div style="color:#25D366;font-weight:600;line-height:1.4;">
                                         ✔ Bestätigung erhalten.<br>
@@ -328,7 +264,11 @@ final class BSBT_Owner_Bookings {
                     d.append('booking_id',btn.dataset.id);
                     d.append('_wpnonce',btn.dataset.nonce);
                     fetch(ajax,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:d})
-                        .then(()=>location.reload());
+                        .then(r=>r.json())
+                        .then(res=>{
+                            if(res && res.success){ location.reload(); return; }
+                            alert('Fehler: ' + ((res && res.data && res.data.message) ? res.data.message : 'Unknown error'));
+                        });
                 });
             });
         })();
@@ -338,7 +278,7 @@ final class BSBT_Owner_Bookings {
     }
 
     /* =========================
-     * AJAX (SECURED)
+     * AJAX CONFIRM/REJECT via CORE
      * ========================= */
     public function ajax_confirm() {
         check_ajax_referer('bsbt_owner_action');
@@ -348,28 +288,21 @@ final class BSBT_Owner_Bookings {
         }
 
         $id = (int)($_POST['booking_id'] ?? 0);
-        if ($id<=0) wp_send_json_error();
+        if ($id<=0) wp_send_json_error(['message'=>'Invalid booking id']);
 
+        // owner check (UI-level)
         if ( ! current_user_can('manage_options') ) {
             if ( $this->get_booking_owner_id($id) !== get_current_user_id() ) {
                 wp_send_json_error(['message'=>'Not your booking']);
             }
         }
 
-        update_post_meta($id,'_bsbt_owner_decision','approved');
-        update_post_meta($id,'_bsbt_owner_decision_time',current_time('mysql'));
+        $result = BSBT_Owner_Decision_Core::approve_and_send_payment($id);
 
-        if (function_exists('wc_get_order')) {
-            $order_id = $this->find_wc_order_for_booking($id);
-            if ($order_id) {
-                $order = wc_get_order($order_id);
-                if ($order && in_array($order->get_status(),['pending','on-hold'],true)) {
-                    $order->update_status('processing','BSBT: Owner approved booking');
-                }
-            }
+        if ( ! empty($result['ok']) ) {
+            wp_send_json_success(['message' => $result['message'] ?? 'OK']);
         }
-
-        wp_send_json_success();
+        wp_send_json_error(['message' => $result['message'] ?? 'Error']);
     }
 
     public function ajax_reject() {
@@ -380,25 +313,21 @@ final class BSBT_Owner_Bookings {
         }
 
         $id = (int)($_POST['booking_id'] ?? 0);
-        if ($id<=0) wp_send_json_error();
+        if ($id<=0) wp_send_json_error(['message'=>'Invalid booking id']);
 
+        // owner check (UI-level)
         if ( ! current_user_can('manage_options') ) {
             if ( $this->get_booking_owner_id($id) !== get_current_user_id() ) {
                 wp_send_json_error(['message'=>'Not your booking']);
             }
         }
 
-        update_post_meta($id,'_bsbt_owner_decision','declined');
-        update_post_meta($id,'_bsbt_owner_decision_time',current_time('mysql'));
+        $result = BSBT_Owner_Decision_Core::decline_booking($id);
 
-        wp_update_post([
-            'ID'          => $id,
-            'post_status' => 'mphb-cancelled',
-        ]);
-
-        $this->notify_admin_reject($id);
-
-        wp_send_json_success();
+        if ( ! empty($result['ok']) ) {
+            wp_send_json_success(['message' => $result['message'] ?? 'OK']);
+        }
+        wp_send_json_error(['message' => $result['message'] ?? 'Error']);
     }
 }
 
