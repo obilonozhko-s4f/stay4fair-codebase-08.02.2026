@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * ВСТАВЬ СЮДА РЕАЛЬНЫЙ КЛЮЧ от Google (Geocoding + Maps Embed).
  * ВАЖНО: не оставляй здесь YOUR_GOOGLE_MAPS_API_KEY_HERE
  */
-define( 'BSBT_MAPS_API_KEY', 'AIzaSyAahEOAlwCKlEKriPYjEJzV6ZktWqJxFC4' );
+define( 'BSBT_MAPS_API_KEY', 'тут должен быть гугл мэп апи' );
 
 /**
  * Основной шорткод [bsbt_map]
