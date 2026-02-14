@@ -6,7 +6,7 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'AAOTM_KEY', 'AIzaSyAahEOAlwCKlEKriPYjEJzV6ZktWqJxFC4' );
+define( 'AAOTM_KEY', 'тут должен быть апи гугл мэп' );
 
 add_action( 'wp_enqueue_scripts', function() {
     $url = plugin_dir_url( __FILE__ );
