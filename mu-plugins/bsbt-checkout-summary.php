@@ -244,7 +244,7 @@ function bsbt_checkout_summary_render() {
             </p>
 
             <p class="bsbt-summary-note">
-                All prices include 7% VAT where applicable.<br>
+                All prices include 7% VAT and City Tax where applicable.<br>
                 No charge will be made at this step. Your card will be temporarily authorized to secure the booking. 
     Payment is only captured after confirmation.
             </p>
