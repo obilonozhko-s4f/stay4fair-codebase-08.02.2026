@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name: BSBT – Owner Bookings (V7.8.1 – SNAPSHOT READY)
+ * Plugin Name: BSBT – Owner Bookings (V7.8.2 – Snapshot + Created Date)
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -31,7 +31,7 @@ final class BSBT_Owner_Bookings {
             'bsbt-owner-bookings',
             plugin_dir_url(__FILE__) . 'assets/css/owner-bookings.css',
             [],
-            '7.8.1'
+            '7.8.2'
         );
     }
 
@@ -89,19 +89,13 @@ final class BSBT_Owner_Bookings {
         return max(0,(strtotime($out)-strtotime($in))/86400);
     }
 
-    /**
-     * Вычисляет сумму выплаты владельцу.
-     * Snapshot-Ready: Приоритет данным из мета-полей брони.
-     */
     private function payout(int $booking_id, int $nights): ?float {
-        // 1️⃣ Сначала проверяем Snapshot (замороженную выплату)
         $snapshot_payout = get_post_meta($booking_id, '_bsbt_snapshot_owner_payout', true);
         
         if ( $snapshot_payout !== '' ) {
             return (float) $snapshot_payout;
         }
 
-        // 2️⃣ Fallback: старая логика, если снапшота еще нет (старые брони)
         if ($nights <= 0 || !function_exists('MPHB')) return null;
 
         $b = MPHB()->getBookingRepository()->findById($booking_id);
@@ -165,6 +159,13 @@ final class BSBT_Owner_Bookings {
                         $owner_decision = get_post_meta($bid,'_bsbt_owner_decision',true);
                         $confirmed = ($owner_decision === 'approved');
                         $declined = ($owner_decision === 'declined');
+                        $expired  = ($owner_decision === 'expired');
+
+                        // 🕒 Created date (always visible)
+                        $created_raw = get_post_field('post_date', $bid);
+                        $created_formatted = $created_raw 
+                            ? date_i18n('d.m.Y H:i', strtotime($created_raw)) 
+                            : '—';
 
                         [$apt_id,$apt_title,$guests_count] = $this->get_booking_data($bid);
                         [$in,$out] = $this->get_dates($bid);
@@ -202,7 +203,20 @@ final class BSBT_Owner_Bookings {
                             </td>
 
                             <td>
-                                <?php if(!$confirmed && !$declined): ?><span class="badge-new">NEUE ANFRAGE</span><?php endif; ?>
+                                <?php if(!$confirmed && !$declined && !$expired): ?>
+                                    <span class="badge-new">NEUE ANFRAGE</span>
+                                <?php endif; ?>
+
+                                <div class="t-gray" style="margin-top:4px; font-size:12px;">
+                                    Erstellt am: <strong><?= esc_html($created_formatted) ?></strong>
+                                </div>
+
+                                <?php if($expired): ?>
+                                    <div style="margin-top:6px; font-size:12px; color:#d32f2f; font-weight:600;">
+                                        Automatisch storniert (keine Rückmeldung innerhalb von 24h)
+                                    </div>
+                                <?php endif; ?>
+
                                 <span class="t-bold"><?= esc_html($guest) ?></span>
                                 <span class="t-gray"><?= esc_html($country) ?> · <?= (int)$guests_count ?> Gäste</span>
 
@@ -228,7 +242,7 @@ final class BSBT_Owner_Bookings {
                                     </div>
                                 <?php elseif($declined): ?>
                                     <div class="locked-info" style="color:#d32f2f; margin-top:10px;">Anfrage abgelehnt</div>
-                                <?php else: ?>
+                                <?php elseif(!$expired): ?>
                                     <div class="locked-info" style="margin-top:10px;">Kontaktdaten werden nach Bestätigung freigeschaltet</div>
                                 <?php endif; ?>
                             </td>
@@ -239,10 +253,11 @@ final class BSBT_Owner_Bookings {
                             </td>
 
                             <td>
-                                <span style="color:<?= $confirmed?'#25D366':($declined?'#d32f2f':'#d32f2f') ?>;font-weight:900;">
+                                <span style="color:<?= $confirmed?'#25D366':(($declined||$expired)?'#d32f2f':'#d32f2f') ?>;font-weight:900;">
                                     <?php 
                                         if($confirmed) echo 'BESTÄTIGT';
                                         elseif($declined) echo 'ABGELEHNT';
+                                        elseif($expired) echo 'EXPIRED';
                                         else echo 'OFFEN';
                                     ?>
                                 </span>
@@ -265,6 +280,12 @@ final class BSBT_Owner_Bookings {
                                     <div style="color:#d32f2f;font-weight:600;line-height:1.4; text-align: left; padding: 5px;">
                                         🚫 Abgelehnt.<br>
                                         <span style="font-weight:normal;">Diese Buchung wird innerhalb von 7 Tagen aus Ihrer Liste gelöscht.</span>
+                                    </div>
+
+                                <?php elseif ($owner_decision === 'expired'): ?>
+                                    <div style="color:#d32f2f;font-weight:600;line-height:1.4; text-align: left; padding: 5px;">
+                                        ⏳ Automatisch storniert (keine Rückmeldung).<br>
+                                        <span style="font-weight:normal;">Bitte prüfen Sie Ihre Verfügbarkeit.</span>
                                     </div>
 
                                 <?php else: ?>
